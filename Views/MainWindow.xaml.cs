@@ -1734,12 +1734,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         InputEventEditButtonsPanel.IsEnabled = enabled;
         InputEventGrid.IsEnabled = enabled;
         InputNodeEditorPanel.IsEnabled = enabled;
+        MainInputNodeTimelineEditor.SetEditingEnabled(enabled);
         _inputNodeEditorWindow?.SetEditingEnabled(enabled);
     }
 
     private void CommitInputEventEditing(bool refreshNodes = true)
     {
         UpdateFocusedBindingSource();
+        MainInputNodeTimelineEditor.CommitEditing();
+        _inputNodeEditorWindow?.CommitEditing();
         InputEventGrid.CommitEdit(DataGridEditingUnit.Cell, true);
         InputEventGrid.CommitEdit(DataGridEditingUnit.Row, true);
         UpdateFocusedBindingSource();
