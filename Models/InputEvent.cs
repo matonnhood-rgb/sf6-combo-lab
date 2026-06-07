@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 
 namespace ComboLab.Models;
@@ -6,6 +6,7 @@ namespace ComboLab.Models;
 public sealed class InputEvent : ObservableObject
 {
     private int _frame;
+    private int? _durationFrames;
     private ObservableCollection<string> _logicalInputs = [];
 
     public int Frame
@@ -25,6 +26,28 @@ public sealed class InputEvent : ObservableObject
     {
         get => Frame + 1;
         set => Frame = Math.Max(1, value) - 1;
+    }
+
+    public int? DurationFrames
+    {
+        get => _durationFrames;
+        set
+        {
+            int? normalized = value is null
+                ? null
+                : Math.Max(1, value.Value);
+            if (SetProperty(ref _durationFrames, normalized))
+            {
+                OnPropertyChanged(nameof(DisplayDurationFrames));
+            }
+        }
+    }
+
+    [JsonIgnore]
+    public int DisplayDurationFrames
+    {
+        get => DurationFrames ?? 1;
+        set => DurationFrames = Math.Max(1, value);
     }
 
     public ObservableCollection<string> LogicalInputs
@@ -62,3 +85,4 @@ public sealed class InputEvent : ObservableObject
         }
     }
 }
+

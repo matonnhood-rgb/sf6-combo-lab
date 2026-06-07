@@ -9,6 +9,7 @@
         MinHeight="700">
     <Window.Resources>
         <local:UnregisteredActionWarningConverter x:Key="UnregisteredActionWarningConverter"/>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </Window.Resources>
 
     <DockPanel Margin="12">
@@ -485,25 +486,275 @@
                                          HorizontalScrollBarVisibility="Auto"
                                          ToolTip="直近の入力イベント、送信予定表、送信結果。詳細ログはlogsフォルダーへ保存します。"/>
 
-                                <DataGrid x:Name="InputEventGrid"
-                                          ItemsSource="{Binding InputEvents}"
-                                          SelectedItem="{Binding DataContext.SelectedInputEvent, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"
-                                          AutoGenerateColumns="False"
-                                          CanUserAddRows="False"
-                                          HeadersVisibility="Column"
-                                          GridLinesVisibility="Horizontal"
-                                          RowHeaderWidth="0"
-                                          SelectionMode="Single"
-                                          SelectionUnit="FullRow">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="フレーム"
-                                                            Width="90"
-                                                            Binding="{Binding DisplayFrame, UpdateSourceTrigger=LostFocus}"/>
-                                        <DataGridTextColumn Header="論理入力（カンマ区切り）"
-                                                            Width="*"
-                                                            Binding="{Binding LogicalInputsText, UpdateSourceTrigger=LostFocus}"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="420"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <Border x:Name="InputNodeEditorPanel"
+                                            BorderBrush="#D0D0D0"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            Padding="8">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="10"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+
+                                            <ListBox x:Name="InputNodeList"
+                                                     Grid.Row="2"
+                                                     ItemsSource="{Binding DataContext.InputNodeRows, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                     SelectedItem="{Binding DataContext.SelectedInputNodeRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Margin="4,5">
+                                                            <TextBlock Text="{Binding DisplayTitle}"
+                                                                       FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding PhysicalPreview}"
+                                                                       Foreground="#475569"
+                                                                       FontSize="12"/>
+                                                            <TextBlock Text="{Binding WarningText}"
+                                                                       Foreground="#B45309"
+                                                                       FontSize="12"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+
+                                            <StackPanel>
+                                                <Border BorderBrush="#CBD5E1"
+                                                        BorderThickness="1"
+                                                        Background="#F8FAFC"
+                                                        Height="220"
+                                                        Margin="0,0,0,8">
+                                                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                                                  VerticalScrollBarVisibility="Auto">
+                                                        <Canvas x:Name="InputTimelineCanvas"
+                                                                Width="{Binding DataContext.InputTimelineWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                Height="{Binding DataContext.InputTimelineHeight, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                MouseLeftButtonDown="InputTimelineCanvas_MouseLeftButtonDown">
+                                                            <Canvas.Background>
+                                                                <DrawingBrush TileMode="Tile"
+                                                                              Viewport="0,0,28,42"
+                                                                              ViewportUnits="Absolute">
+                                                                    <DrawingBrush.Drawing>
+                                                                        <DrawingGroup>
+                                                                            <GeometryDrawing Geometry="M0,0 L28,0">
+                                                                                <GeometryDrawing.Pen>
+                                                                                    <Pen Brush="#E2E8F0" Thickness="1"/>
+                                                                                </GeometryDrawing.Pen>
+                                                                            </GeometryDrawing>
+                                                                            <GeometryDrawing Geometry="M0,0 L0,42">
+                                                                                <GeometryDrawing.Pen>
+                                                                                    <Pen Brush="#E2E8F0" Thickness="1"/>
+                                                                                </GeometryDrawing.Pen>
+                                                                            </GeometryDrawing>
+                                                                        </DrawingGroup>
+                                                                    </DrawingBrush.Drawing>
+                                                                </DrawingBrush>
+                                                            </Canvas.Background>
+                                                            <ItemsControl ItemsSource="{Binding DataContext.InputTimelineTicks, RelativeSource={RelativeSource AncestorType=Window}}">
+                                                                <ItemsControl.ItemsPanel>
+                                                                    <ItemsPanelTemplate>
+                                                                        <Canvas/>
+                                                                    </ItemsPanelTemplate>
+                                                                </ItemsControl.ItemsPanel>
+                                                                <ItemsControl.ItemContainerStyle>
+                                                                    <Style TargetType="ContentPresenter">
+                                                                        <Setter Property="Canvas.Left" Value="{Binding Left}"/>
+                                                                        <Setter Property="Canvas.Top" Value="0"/>
+                                                                    </Style>
+                                                                </ItemsControl.ItemContainerStyle>
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <Grid Width="28"
+                                                                              Height="{Binding DataContext.InputTimelineHeight, RelativeSource={RelativeSource AncestorType=Window}}">
+                                                                            <Border Width="1"
+                                                                                    Height="{Binding DataContext.InputTimelineHeight, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                                    HorizontalAlignment="Left"
+                                                                                    Background="#E2E8F0"/>
+                                                                            <TextBlock Text="{Binding Label}"
+                                                                                       Margin="2,2,0,0"
+                                                                                       FontSize="10"
+                                                                                       Foreground="#64748B"/>
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                            <ItemsControl ItemsSource="{Binding DataContext.InputNodeRows, RelativeSource={RelativeSource AncestorType=Window}}">
+                                                                <ItemsControl.ItemsPanel>
+                                                                    <ItemsPanelTemplate>
+                                                                        <Canvas/>
+                                                                    </ItemsPanelTemplate>
+                                                                </ItemsControl.ItemsPanel>
+                                                                <ItemsControl.ItemContainerStyle>
+                                                                    <Style TargetType="ContentPresenter">
+                                                                        <Setter Property="Canvas.Left" Value="{Binding TimelineLeft}"/>
+                                                                        <Setter Property="Canvas.Top" Value="{Binding TimelineTop}"/>
+                                                                    </Style>
+                                                                </ItemsControl.ItemContainerStyle>
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <Grid Width="{Binding TimelineWidth}"
+                                                                              Height="34"
+                                                                              MinWidth="34"
+                                                                              ClipToBounds="False">
+                                                                            <Thumb Tag="{Binding}"
+                                                                                   Width="{Binding TimelineWidth}"
+                                                                                   Cursor="SizeAll"
+                                                                                   PreviewMouseLeftButtonDown="InputTimelineNode_SelectOnly"
+                                                                                   DragStarted="InputTimelineNode_DragStarted"
+                                                                                   DragDelta="InputTimelineNode_DragDelta"
+                                                                                   DragCompleted="InputTimelineNode_DragCompleted">
+                                                                                <Thumb.Template>
+                                                                                    <ControlTemplate TargetType="Thumb">
+                                                                                        <Grid ClipToBounds="False">
+                                                                                            <Border Background="#DBEAFE"
+                                                                                                    BorderBrush="#2563EB"
+                                                                                                    BorderThickness="1"
+                                                                                                    CornerRadius="3"/>
+                                                                                            <TextBlock Text="{Binding TimelineText}"
+                                                                                                       Width="{Binding TimelineLabelWidth}"
+                                                                                                       Margin="6,3,0,0"
+                                                                                                       Foreground="#1E3A8A"
+                                                                                                       FontWeight="SemiBold"
+                                                                                                       TextWrapping="NoWrap"
+                                                                                                       IsHitTestVisible="False"/>
+                                                                                        </Grid>
+                                                                                    </ControlTemplate>
+                                                                                </Thumb.Template>
+                                                                            </Thumb>
+                                                                            <Thumb Width="12"
+                                                                                   HorizontalAlignment="Right"
+                                                                                   Cursor="SizeWE"
+                                                                                   Tag="{Binding}"
+                                                                                   PreviewMouseLeftButtonDown="InputTimelineNode_SelectOnly"
+                                                                                   DragStarted="InputTimelineResize_DragStarted"
+                                                                                   DragDelta="InputTimelineResize_DragDelta"
+                                                                                   DragCompleted="InputTimelineNode_DragCompleted">
+                                                                                <Thumb.Template>
+                                                                                    <ControlTemplate TargetType="Thumb">
+                                                                                        <Border Background="#1D4ED8" Opacity="0.75"/>
+                                                                                    </ControlTemplate>
+                                                                                </Thumb.Template>
+                                                                            </Thumb>
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                            <Rectangle Canvas.Left="{Binding DataContext.InputTimelineDragPreviewLeft, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                       Canvas.Top="{Binding DataContext.InputTimelineDragPreviewTop, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                       Width="{Binding DataContext.InputTimelineDragPreviewWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                       Height="34"
+                                                                       Stroke="#0F172A"
+                                                                       StrokeThickness="2"
+                                                                       StrokeDashArray="4 2"
+                                                                       Fill="#60FFFFFF"
+                                                                       IsHitTestVisible="False"
+                                                                       Visibility="{Binding DataContext.IsInputTimelineDragPreviewVisible, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                                            <Border Canvas.Left="{Binding DataContext.InputTimelineDragPreviewLeft, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    Canvas.Top="{Binding DataContext.InputTimelineDragPreviewLabelTop, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    Background="#0F172A"
+                                                                    CornerRadius="3"
+                                                                    Padding="6,2"
+                                                                    IsHitTestVisible="False"
+                                                                    Visibility="{Binding DataContext.IsInputTimelineDragPreviewVisible, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                                <TextBlock Text="{Binding DataContext.InputTimelineDragPreviewText, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                           Foreground="White"
+                                                                           FontSize="12"
+                                                                           FontWeight="SemiBold"/>
+                                                            </Border>
+                                                        </Canvas>
+                                                    </ScrollViewer>
+                                                </Border>
+
+                                                <WrapPanel Margin="0,0,0,8">
+                                                    <Button Content="ノード追加" Click="AddInputEvent_Click"/>
+                                                    <Button Content="ノード削除" Click="DeleteInputEvent_Click"/>
+                                                    <Button Content="複製" Click="DuplicateInputNode_Click"/>
+                                                    <Button Content="上へ" Click="MoveInputEventUp_Click"/>
+                                                    <Button Content="下へ" Click="MoveInputEventDown_Click"/>
+                                                    <Button Content="F順に並べ替え" Click="SortInputNodesByFrame_Click"/>
+                                                    <Button Content="入力クリア" Click="ClearInputNode_Click"/>
+                                                </WrapPanel>
+
+                                                <Grid Margin="0,0,0,8">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="80"/>
+                                                        <ColumnDefinition Width="90"/>
+                                                        <ColumnDefinition Width="100"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="フレーム"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBox x:Name="InputNodeFrameTextBox"
+                                                             Grid.Column="1"
+                                                             Text="{Binding SelectedInputNodeRow.DisplayFrame, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"/>
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="入力表記"
+                                                               VerticalAlignment="Center"
+                                                               Margin="12,0,0,0"/>
+                                                    <TextBox x:Name="InputNodeInputsTextBox"
+                                                             Grid.Column="3"
+                                                             Text="{Binding SelectedInputNodeRow.InputsText, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"/>
+                                                </Grid>
+
+                                                <UniformGrid Columns="3"
+                                                             Rows="3"
+                                                             Width="150"
+                                                             HorizontalAlignment="Left">
+                                                    <Button Content="7" Tag="7" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="8" Tag="8" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="9" Tag="9" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="4" Tag="4" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="5" Tag="5" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="6" Tag="6" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="1" Tag="1" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="2" Tag="2" Click="SetInputNodeDirection_Click"/>
+                                                    <Button Content="3" Tag="3" Click="SetInputNodeDirection_Click"/>
+                                                </UniformGrid>
+
+                                                <WrapPanel Margin="0,8,0,0">
+                                                    <Button Content="lp" Tag="lp" Click="ToggleInputNodeAttack_Click"/>
+                                                    <Button Content="mp" Tag="mp" Click="ToggleInputNodeAttack_Click"/>
+                                                    <Button Content="hp" Tag="hp" Click="ToggleInputNodeAttack_Click"/>
+                                                    <Button Content="lk" Tag="lk" Click="ToggleInputNodeAttack_Click"/>
+                                                    <Button Content="mk" Tag="mk" Click="ToggleInputNodeAttack_Click"/>
+                                                    <Button Content="hk" Tag="hk" Click="ToggleInputNodeAttack_Click"/>
+                                                </WrapPanel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <DataGrid x:Name="InputEventGrid"
+                                              Grid.Row="2"
+                                              ItemsSource="{Binding InputEvents}"
+                                              SelectedItem="{Binding DataContext.SelectedInputEvent, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"
+                                              AutoGenerateColumns="False"
+                                              CanUserAddRows="False"
+                                              HeadersVisibility="Column"
+                                              GridLinesVisibility="Horizontal"
+                                              RowHeaderWidth="0"
+                                              SelectionMode="Single"
+                                              SelectionUnit="FullRow">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="フレーム"
+                                                                Width="90"
+                                                                Binding="{Binding DisplayFrame, UpdateSourceTrigger=LostFocus}"/>
+                                            <DataGridTextColumn Header="保持F"
+                                                                Width="80"
+                                                                Binding="{Binding DurationFrames, UpdateSourceTrigger=LostFocus}"/>
+                                            <DataGridTextColumn Header="論理入力（カンマ区切り）"
+                                                                Width="*"
+                                                                Binding="{Binding LogicalInputsText, UpdateSourceTrigger=LostFocus}"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
                             </DockPanel>
                         </Border>
                     </Grid>

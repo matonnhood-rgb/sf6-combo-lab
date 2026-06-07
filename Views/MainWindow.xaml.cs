@@ -20,6 +20,11 @@ namespace ComboLab.Views;
 
 public partial class MainWindow : Window, INotifyPropertyChanged
 {
+    public const double InputTimelinePixelsPerFrame = 28d;
+    private const int InputTimelineMinimumFrames = 60;
+    public const double InputTimelineLaneHeight = 42d;
+    public const double InputTimelineTopPadding = 24d;
+
     private readonly IComboStorageService _storageService = new JsonComboStorageService();
     private readonly ComboLibraryMigrationService _migrationService = new();
     private readonly ShareTextService _shareTextService = new();
@@ -56,6 +61,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private KeyMapProfile _activeKeyMapProfile =
         KeyMapDefaults.CreateLibrary().Profiles[0];
     private KeyMapBindingRow? _selectedKeyMapBindingRow;
+    private InputNodeRow? _selectedInputNodeRow;
+    private bool _isSynchronizingInputSelection;
+    private InputTimelineDragState? _inputTimelineDragState;
+    private bool _isInputTimelineDragPreviewVisible;
+    private double _inputTimelineDragPreviewLeft;
+    private double _inputTimelineDragPreviewTop;
+    private double _inputTimelineDragPreviewLabelTop;
+    private double _inputTimelineDragPreviewWidth;
+    private string _inputTimelineDragPreviewText = string.Empty;
     private readonly List<string> _currentPlaybackLogLines = [];
 
     public MainWindow()
@@ -77,6 +91,90 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public ObservableCollection<string> KeyMapPreviewLines { get; } = [];
 
+    public ObservableCollection<InputNodeRow> InputNodeRows { get; } = [];
+
+    public ObservableCollection<InputTimelineTick> InputTimelineTicks { get; } = [];
+
+    public double InputTimelineWidth =>
+        Math.Max(
+            InputTimelineMinimumFrames,
+            (SelectedActionDefinition?.InputEvents.Count == 0
+                ? 0
+                : SelectedActionDefinition?.InputEvents.Max(item =>
+                    item.Frame + (item.DurationFrames ?? 1) + 4) ?? 0))
+        * InputTimelinePixelsPerFrame;
+
+    public double InputTimelineHeight =>
+        InputTimelineTopPadding
+        + Math.Max(4, InputNodeRows.Count) * InputTimelineLaneHeight
+        + 20;
+
+    public bool IsInputTimelineDragPreviewVisible
+    {
+        get => _isInputTimelineDragPreviewVisible;
+        private set
+        {
+            _isInputTimelineDragPreviewVisible = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public double InputTimelineDragPreviewLeft
+    {
+        get => _inputTimelineDragPreviewLeft;
+        private set
+        {
+            _inputTimelineDragPreviewLeft = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public double InputTimelineDragPreviewTop
+    {
+        get => _inputTimelineDragPreviewTop;
+        private set
+        {
+            _inputTimelineDragPreviewTop = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public double InputTimelineDragPreviewLabelTop
+    {
+        get => _inputTimelineDragPreviewLabelTop;
+        private set
+        {
+            _inputTimelineDragPreviewLabelTop = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public double InputTimelineDragPreviewWidth
+    {
+        get => _inputTimelineDragPreviewWidth;
+        private set
+        {
+            _inputTimelineDragPreviewWidth = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string InputTimelineDragPreviewText
+    {
+        get => _inputTimelineDragPreviewText;
+        private set
+        {
+            _inputTimelineDragPreviewText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public static double InputTimelineFrameToLeft(int frame) =>
+        Math.Max(0, frame) * InputTimelinePixelsPerFrame;
+
+    public static double InputTimelineFramesToWidth(int frames) =>
+        Math.Max(1, frames) * InputTimelinePixelsPerFrame;
+
     public KeyMapBindingRow? SelectedKeyMapBindingRow
     {
         get => _selectedKeyMapBindingRow;
@@ -84,6 +182,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _selectedKeyMapBindingRow = value;
             OnPropertyChanged();
+        }
+    }
+
+    public InputNodeRow? SelectedInputNodeRow
+    {
+        get => _selectedInputNodeRow;
+        set
+        {
+            if (ReferenceEquals(_selectedInputNodeRow, value))
+            {
+                return;
+            }
+
+            _selectedInputNodeRow = value;
+            OnPropertyChanged();
+            if (!_isSynchronizingInputSelection)
+            {
+                _isSynchronizingInputSelection = true;
+                SelectedInputEvent = value?.InputEvent;
+                _isSynchronizingInputSelection = false;
+            }
         }
     }
 
@@ -338,8 +457,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
+            DetachSelectedActionInputEvents();
             _selectedActionDefinition = value;
             SelectedInputEvent = null;
+            AttachSelectedActionInputEvents();
+            RefreshInputNodeRows();
             OnPropertyChanged();
             ActionEditorPanel.IsEnabled = value is not null;
 
@@ -357,6 +479,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _selectedInputEvent = value;
             OnPropertyChanged();
+            if (!_isSynchronizingInputSelection)
+            {
+                _isSynchronizingInputSelection = true;
+                SelectedInputNodeRow = InputNodeRows.FirstOrDefault(row =>
+                    ReferenceEquals(row.InputEvent, value));
+                _isSynchronizingInputSelection = false;
+            }
         }
     }
 
@@ -581,8 +710,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         TimelineGrid.CommitEdit(DataGridEditingUnit.Cell, true);
         TimelineGrid.CommitEdit(DataGridEditingUnit.Row, true);
-        InputEventGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-        InputEventGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        CommitInputEventEditing();
     }
 
     private void CopyShareText_Click(object sender, RoutedEventArgs e)
@@ -710,16 +838,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var inputEvent = new Models.InputEvent
-        {
-            Frame = SelectedActionDefinition.InputEvents.Count == 0
-                ? 0
-                : SelectedActionDefinition.InputEvents.Max(item => item.Frame) + 1
-        };
-        SelectedActionDefinition.InputEvents.Add(inputEvent);
-        SelectedInputEvent = inputEvent;
-        InputEventGrid.ScrollIntoView(inputEvent);
-        InputEventGrid.Focus();
+        var inputEvent = InputNodeEditorLogic.CreateNodeAfter(
+            SelectedActionDefinition.InputEvents,
+            SelectedInputEvent);
+        var insertIndex = SelectedInputEvent is null
+            ? SelectedActionDefinition.InputEvents.Count
+            : SelectedActionDefinition.InputEvents.IndexOf(SelectedInputEvent) + 1;
+        SelectedActionDefinition.InputEvents.Insert(
+            Math.Clamp(insertIndex, 0, SelectedActionDefinition.InputEvents.Count),
+            inputEvent);
+        SelectInputEvent(inputEvent);
     }
 
     private void DeleteInputEvent_Click(object sender, RoutedEventArgs e)
@@ -731,10 +859,256 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var index = SelectedActionDefinition.InputEvents.IndexOf(SelectedInputEvent);
         SelectedActionDefinition.InputEvents.Remove(SelectedInputEvent);
-        SelectedInputEvent = SelectedActionDefinition.InputEvents.Count == 0
+        SelectInputEvent(SelectedActionDefinition.InputEvents.Count == 0
             ? null
             : SelectedActionDefinition.InputEvents[
-                Math.Min(index, SelectedActionDefinition.InputEvents.Count - 1)];
+                Math.Min(index, SelectedActionDefinition.InputEvents.Count - 1)]);
+    }
+
+    private void DuplicateInputNode_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedActionDefinition is null || SelectedInputEvent is null)
+        {
+            return;
+        }
+
+        var inputEvent = InputNodeEditorLogic.DuplicateNode(
+            SelectedActionDefinition.InputEvents,
+            SelectedInputEvent);
+        var insertIndex =
+            SelectedActionDefinition.InputEvents.IndexOf(SelectedInputEvent) + 1;
+        SelectedActionDefinition.InputEvents.Insert(insertIndex, inputEvent);
+        SelectInputEvent(inputEvent);
+    }
+
+    private void SortInputNodesByFrame_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedActionDefinition is null)
+        {
+            return;
+        }
+
+        var selected = SelectedInputEvent;
+        var sorted = SelectedActionDefinition.InputEvents
+            .OrderBy(item => item.Frame)
+            .ThenBy(item => SelectedActionDefinition.InputEvents.IndexOf(item))
+            .ToArray();
+        SelectedActionDefinition.InputEvents.Clear();
+        foreach (var inputEvent in sorted)
+        {
+            SelectedActionDefinition.InputEvents.Add(inputEvent);
+        }
+
+        SelectInputEvent(selected);
+    }
+
+    private void ClearInputNode_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedInputEvent is null)
+        {
+            return;
+        }
+
+        InputNodeEditorLogic.Clear(SelectedInputEvent);
+        RefreshInputNodeRows();
+    }
+
+    private void SetInputNodeDirection_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedInputEvent is null
+            || sender is not Button { Tag: string direction })
+        {
+            return;
+        }
+
+        InputNodeEditorLogic.SetDirection(SelectedInputEvent, direction);
+        RefreshInputNodeRows();
+    }
+
+    private void ToggleInputNodeAttack_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedInputEvent is null
+            || sender is not Button { Tag: string attack })
+        {
+            return;
+        }
+
+        InputNodeEditorLogic.ToggleAttack(SelectedInputEvent, attack);
+        RefreshInputNodeRows();
+    }
+
+    private void InputTimelineCanvas_MouseLeftButtonDown(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (e.ClickCount < 2)
+        {
+            return;
+        }
+
+        if (SelectedActionDefinition is null)
+        {
+            return;
+        }
+
+        var frame = Math.Max(
+            0,
+            (int)Math.Round(
+                e.GetPosition(InputTimelineCanvas).X
+                / InputTimelinePixelsPerFrame));
+        var inputEvent = InputNodeEditorLogic.CreateNode(frame);
+        SelectedActionDefinition.InputEvents.Add(inputEvent);
+        SelectInputEvent(inputEvent);
+        e.Handled = true;
+    }
+
+    private void InputTimelineNode_SelectOnly(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: InputNodeRow row })
+        {
+            UpdateFocusedBindingSource();
+            SelectInputEvent(row.InputEvent);
+        }
+
+        e.Handled = false;
+    }
+
+    private void InputTimelineNode_DragStarted(
+        object sender,
+        DragStartedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: InputNodeRow row })
+        {
+            return;
+        }
+
+        CommitInputEventEditing(refreshNodes: false);
+        SelectInputEvent(row.InputEvent);
+        var cursorX = Mouse.GetPosition(InputTimelineCanvas).X;
+        _inputTimelineDragState = new InputTimelineDragState(
+            row,
+            cursorX,
+            row.InputEvent.Frame,
+            row.InputEvent.DurationFrames ?? GetCurrentHoldDurationFrames(),
+            false);
+        ShowInputTimelineDragPreview(_inputTimelineDragState);
+    }
+
+    private void InputTimelineResize_DragStarted(
+        object sender,
+        DragStartedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: InputNodeRow row })
+        {
+            return;
+        }
+
+        CommitInputEventEditing(refreshNodes: false);
+        SelectInputEvent(row.InputEvent);
+        var cursorX = Mouse.GetPosition(InputTimelineCanvas).X;
+        _inputTimelineDragState = new InputTimelineDragState(
+            row,
+            cursorX,
+            row.InputEvent.Frame,
+            row.InputEvent.DurationFrames ?? GetCurrentHoldDurationFrames(),
+            true);
+        ShowInputTimelineDragPreview(_inputTimelineDragState);
+    }
+
+    private void InputTimelineNode_DragDelta(
+        object sender,
+        DragDeltaEventArgs e)
+    {
+        if (_inputTimelineDragState is null)
+        {
+            return;
+        }
+
+        var cursorX = Mouse.GetPosition(InputTimelineCanvas).X;
+        _inputTimelineDragState.TargetFrame =
+            CalculateFrameFromCursor(
+                cursorX,
+                _inputTimelineDragState.GrabOffsetX);
+        ShowInputTimelineDragPreview(_inputTimelineDragState);
+    }
+
+    private void InputTimelineResize_DragDelta(
+        object sender,
+        DragDeltaEventArgs e)
+    {
+        if (_inputTimelineDragState is null)
+        {
+            return;
+        }
+
+        var cursorX = Mouse.GetPosition(InputTimelineCanvas).X;
+        _inputTimelineDragState.TargetDurationFrames =
+            CalculateDurationFromCursor(
+                cursorX,
+                _inputTimelineDragState.StartFrame);
+        ShowInputTimelineDragPreview(_inputTimelineDragState);
+    }
+
+    private void ShowInputTimelineDragPreview(InputTimelineDragState state)
+    {
+        InputTimelineDragPreviewLeft =
+            InputTimelineFrameToLeft(state.TargetFrame);
+        InputTimelineDragPreviewTop = state.Row.TimelineTop;
+        InputTimelineDragPreviewLabelTop =
+            Math.Max(0, state.Row.TimelineTop - 24);
+        InputTimelineDragPreviewWidth =
+            InputTimelineFramesToWidth(state.TargetDurationFrames);
+        InputTimelineDragPreviewText = state.IsResize
+            ? $"保持 {state.TargetDurationFrames}F"
+            : $"{state.TargetFrame + 1}F";
+        IsInputTimelineDragPreviewVisible = true;
+    }
+
+    private void HideInputTimelineDragPreview() =>
+        IsInputTimelineDragPreviewVisible = false;
+
+    private static int CalculateFrameFromCursor(
+        double cursorX,
+        double grabOffsetX) =>
+        Math.Max(
+            0,
+            (int)Math.Round(
+                (cursorX - grabOffsetX) / InputTimelinePixelsPerFrame,
+                MidpointRounding.AwayFromZero));
+
+    private static int CalculateDurationFromCursor(
+        double cursorX,
+        int startFrame) =>
+        Math.Max(
+            1,
+            (int)Math.Round(
+                (cursorX - InputTimelineFrameToLeft(startFrame))
+                / InputTimelinePixelsPerFrame,
+                MidpointRounding.AwayFromZero));
+
+    private void InputTimelineNode_DragCompleted(
+        object sender,
+        DragCompletedEventArgs e)
+    {
+        if (_inputTimelineDragState is not null)
+        {
+            if (_inputTimelineDragState.IsResize)
+            {
+                _inputTimelineDragState.Row.DurationFrames =
+                    _inputTimelineDragState.TargetDurationFrames;
+            }
+            else
+            {
+                _inputTimelineDragState.Row.InternalFrame =
+                    _inputTimelineDragState.TargetFrame;
+            }
+        }
+
+        _inputTimelineDragState = null;
+        HideInputTimelineDragPreview();
+        RefreshInputNodeRows();
     }
 
     private void MoveInputEventUp_Click(object sender, RoutedEventArgs e) =>
@@ -758,8 +1132,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         SelectedActionDefinition.InputEvents.Move(oldIndex, newIndex);
-        InputEventGrid.SelectedItem = SelectedInputEvent;
-        InputEventGrid.ScrollIntoView(SelectedInputEvent);
+        SelectInputEvent(SelectedInputEvent);
+    }
+
+    private void SelectInputEvent(Models.InputEvent? inputEvent)
+    {
+        SelectedInputEvent = inputEvent;
+        if (inputEvent is null)
+        {
+            return;
+        }
+
+        InputEventGrid.ScrollIntoView(inputEvent);
+        InputNodeList.ScrollIntoView(SelectedInputNodeRow);
+        InputNodeList.Focus();
     }
 
     private async void TestPlayback_Click(object sender, RoutedEventArgs e)
@@ -839,6 +1225,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             + $"delay={startDelaySeconds}秒 "
             + $"frameMs={ActionTestPlaybackService.MillisecondsPerFrame:0.###} "
             + $"holdMs={pressDuration.Value.TotalMilliseconds:0.###}");
+        AppendTestPlaybackLog("[InputNodes]");
+        foreach (var line in FormatInputNodeLogLines(actionDefinition))
+        {
+            AppendTestPlaybackLog(line);
+        }
+
+        AppendTestPlaybackLog(string.Empty);
         AppendTestPlaybackLog("[InputEvents]");
         foreach (var line in ActionTestPlaybackService.FormatInputEvents(
                      actionDefinition))
@@ -1224,6 +1617,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return true;
     }
 
+    private int GetCurrentHoldDurationFrames()
+    {
+        return TryGetPressDuration(out var duration)
+            ? Math.Max(
+                1,
+                (int)Math.Round(
+                    duration.Value.TotalSeconds
+                    * ActionTestPlaybackService.FramesPerSecond))
+            : 1;
+    }
+
     private void SetPlaybackControlsEnabled(bool enabled)
     {
         TestPlaybackButton.IsEnabled =
@@ -1238,14 +1642,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PresentSyncSettingsPanel.IsEnabled = enabled;
         InputEventEditButtonsPanel.IsEnabled = enabled;
         InputEventGrid.IsEnabled = enabled;
+        InputNodeEditorPanel.IsEnabled = enabled;
     }
 
-    private void CommitInputEventEditing()
+    private void CommitInputEventEditing(bool refreshNodes = true)
     {
         UpdateFocusedBindingSource();
         InputEventGrid.CommitEdit(DataGridEditingUnit.Cell, true);
         InputEventGrid.CommitEdit(DataGridEditingUnit.Row, true);
         UpdateFocusedBindingSource();
+        if (refreshNodes)
+        {
+            RefreshInputNodeRows();
+        }
     }
 
     private static void UpdateFocusedBindingSource()
@@ -1287,6 +1696,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         new()
         {
             Frame = source.Frame,
+            DurationFrames = source.DurationFrames,
             LogicalInputs = new ObservableCollection<string>(
                 source.LogicalInputs)
         };
@@ -1314,7 +1724,142 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _testPlaybackService.SetKeyMapResolver(
             new KeyMapResolver(ActiveKeyMapProfile));
         RefreshKeyMapPreview();
+        RefreshInputNodeRows();
     }
+
+    private void AttachSelectedActionInputEvents()
+    {
+        if (SelectedActionDefinition is null)
+        {
+            return;
+        }
+
+        SelectedActionDefinition.InputEvents.CollectionChanged +=
+            InputEvents_CollectionChanged;
+        foreach (var inputEvent in SelectedActionDefinition.InputEvents)
+        {
+            inputEvent.PropertyChanged += InputEvent_PropertyChanged;
+        }
+    }
+
+    private void DetachSelectedActionInputEvents()
+    {
+        if (_selectedActionDefinition is null)
+        {
+            return;
+        }
+
+        _selectedActionDefinition.InputEvents.CollectionChanged -=
+            InputEvents_CollectionChanged;
+        foreach (var inputEvent in _selectedActionDefinition.InputEvents)
+        {
+            inputEvent.PropertyChanged -= InputEvent_PropertyChanged;
+        }
+    }
+
+    private void InputEvents_CollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (Models.InputEvent inputEvent in e.OldItems)
+            {
+                inputEvent.PropertyChanged -= InputEvent_PropertyChanged;
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (Models.InputEvent inputEvent in e.NewItems)
+            {
+                inputEvent.PropertyChanged += InputEvent_PropertyChanged;
+            }
+        }
+
+        RefreshInputNodeRows();
+    }
+
+    private void InputEvent_PropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(Models.InputEvent.Frame)
+            or nameof(Models.InputEvent.DisplayFrame)
+            or nameof(Models.InputEvent.DurationFrames)
+            or nameof(Models.InputEvent.DisplayDurationFrames)
+            or nameof(Models.InputEvent.LogicalInputs)
+            or nameof(Models.InputEvent.LogicalInputsText))
+        {
+            if (_inputTimelineDragState is not null)
+            {
+                RefreshInputTimelineMetrics();
+                return;
+            }
+
+            RefreshInputNodeRows();
+        }
+    }
+
+    private void RefreshInputNodeRows()
+    {
+        var selected = SelectedInputEvent;
+        foreach (var row in InputNodeRows)
+        {
+            row.Dispose();
+        }
+
+        InputNodeRows.Clear();
+        if (SelectedActionDefinition is not null)
+        {
+            foreach (var inputEvent in SelectedActionDefinition.InputEvents)
+            {
+                InputNodeRows.Add(new InputNodeRow(
+                    inputEvent,
+                    InputNodeRows.Count,
+                    () => ActiveKeyMapProfile));
+            }
+        }
+
+        _isSynchronizingInputSelection = true;
+        SelectedInputNodeRow = InputNodeRows.FirstOrDefault(row =>
+            ReferenceEquals(row.InputEvent, selected));
+        _isSynchronizingInputSelection = false;
+        RefreshInputTimelineMetrics();
+    }
+
+    private void RefreshInputTimelineMetrics()
+    {
+        RefreshInputTimelineTicks();
+        OnPropertyChanged(nameof(InputTimelineWidth));
+        OnPropertyChanged(nameof(InputTimelineHeight));
+    }
+
+    private void RefreshInputTimelineTicks()
+    {
+        InputTimelineTicks.Clear();
+        var frameCount = (int)Math.Ceiling(
+            InputTimelineWidth / InputTimelinePixelsPerFrame);
+        for (var frame = 0; frame <= frameCount; frame++)
+        {
+            var displayFrame = frame + 1;
+            InputTimelineTicks.Add(new InputTimelineTick(
+                InputTimelineFrameToLeft(frame),
+                displayFrame == 1 || displayFrame % 5 == 0
+                    ? $"{displayFrame}F"
+                    : string.Empty));
+        }
+    }
+
+    private static IReadOnlyList<string> FormatInputNodeLogLines(
+        ActionDefinition actionDefinition) =>
+        (actionDefinition.InputEvents ?? [])
+            .OrderBy(item => item.Frame)
+            .Select(item =>
+                $"{item.DisplayFrame}F display / {item.Frame}F internal: "
+                + InputNodeEditorLogic.FormatNode(item)
+                + $" / hold={item.DurationFrames?.ToString(CultureInfo.InvariantCulture) ?? "global"}F")
+            .ToArray();
 
     private void RefreshKeyMapRows()
     {
@@ -1902,6 +2447,216 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 public sealed record KeyboardSendModeOption(
     string DisplayName,
     KeyboardSendMode Value);
+
+public sealed record InputTimelineTick(double Left, string Label);
+
+public sealed class InputTimelineDragState
+{
+    public InputTimelineDragState(
+        InputNodeRow row,
+        double startX,
+        int startFrame,
+        int startDurationFrames,
+        bool isResize)
+    {
+        Row = row;
+        StartX = startX;
+        StartFrame = startFrame;
+        StartDurationFrames = startDurationFrames;
+        GrabOffsetX = Math.Max(
+            0,
+            startX - MainWindow.InputTimelineFrameToLeft(startFrame));
+        TargetFrame = startFrame;
+        TargetDurationFrames = startDurationFrames;
+        IsResize = isResize;
+    }
+
+    public InputNodeRow Row { get; }
+
+    public double StartX { get; }
+
+    public double GrabOffsetX { get; }
+
+    public int StartFrame { get; }
+
+    public int StartDurationFrames { get; }
+
+    public int TargetFrame { get; set; }
+
+    public int TargetDurationFrames { get; set; }
+
+    public bool IsResize { get; }
+
+}
+
+public sealed class InputNodeRow : INotifyPropertyChanged, IDisposable
+{
+    private readonly Func<KeyMapProfile> _getKeyMapProfile;
+    private readonly InputNotationParser _parser = new();
+
+    public InputNodeRow(
+        Models.InputEvent inputEvent,
+        int lane,
+        Func<KeyMapProfile> getKeyMapProfile)
+    {
+        InputEvent = inputEvent;
+        Lane = lane;
+        _getKeyMapProfile = getKeyMapProfile;
+        InputEvent.PropertyChanged += InputEvent_PropertyChanged;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public Models.InputEvent InputEvent { get; }
+
+    public int Lane { get; }
+
+    public int DisplayFrame
+    {
+        get => InputEvent.DisplayFrame;
+        set
+        {
+            InputEvent.DisplayFrame = value;
+            Refresh();
+        }
+    }
+
+    public int InternalFrame
+    {
+        get => InputEvent.Frame;
+        set
+        {
+            InputEvent.Frame = Math.Max(0, value);
+            Refresh();
+        }
+    }
+
+    public int DurationFrames
+    {
+        get => InputEvent.DurationFrames ?? 1;
+        set
+        {
+            InputEvent.DurationFrames = Math.Max(1, value);
+            Refresh();
+        }
+    }
+
+    public string InputsText
+    {
+        get => InputEvent.LogicalInputsText;
+        set
+        {
+            InputEvent.LogicalInputsText = value;
+            Refresh();
+        }
+    }
+
+    public string DisplayTitle =>
+        $"[{DisplayFrame}F] {InputNodeEditorLogic.FormatNode(InputEvent)}";
+
+    public double TimelineLeft =>
+        MainWindow.InputTimelineFrameToLeft(InputEvent.Frame);
+
+    public double TimelineWidth =>
+        MainWindow.InputTimelineFramesToWidth(DurationFrames);
+
+    public double TimelineTop =>
+        MainWindow.InputTimelineTopPadding
+        + Lane * MainWindow.InputTimelineLaneHeight;
+
+    public double TimelineLabelWidth =>
+        Math.Max(
+            TimelineWidth,
+            24 + TimelineText.Length * 9);
+
+    public string TimelineText =>
+        InputNodeEditorLogic.FormatNode(InputEvent);
+
+    public string PhysicalPreview
+    {
+        get
+        {
+            var parseResult = _parser.ParseMany(InputEvent.LogicalInputs);
+            var resolveResult =
+                new KeyMapResolver(_getKeyMapProfile()).Resolve(
+                    parseResult.Tokens);
+            if (parseResult.Errors.Count > 0 || resolveResult.Errors.Count > 0)
+            {
+                return "物理: 未設定";
+            }
+
+            return resolveResult.Keys.Count == 0
+                ? "物理: なし"
+                : "物理: "
+                  + string.Join(
+                      " + ",
+                      resolveResult.Keys.Select(key => key.DisplayName));
+        }
+    }
+
+    public string WarningText
+    {
+        get
+        {
+            var parseResult = _parser.ParseMany(InputEvent.LogicalInputs);
+            var resolveResult =
+                new KeyMapResolver(_getKeyMapProfile()).Resolve(
+                    parseResult.Tokens);
+            var warnings = parseResult.Errors
+                .Select(error => error.Message)
+                .Concat(resolveResult.Errors.Select(error => error.Message))
+                .ToArray();
+            return warnings.Length == 0
+                ? string.Empty
+                : "警告: " + string.Join(" / ", warnings);
+        }
+    }
+
+    public void Dispose() =>
+        InputEvent.PropertyChanged -= InputEvent_PropertyChanged;
+
+    public void Refresh()
+    {
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(DisplayFrame)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(InputsText)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(DurationFrames)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(DisplayTitle)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(TimelineLeft)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(TimelineWidth)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(TimelineTop)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(TimelineLabelWidth)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(TimelineText)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(PhysicalPreview)));
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(WarningText)));
+    }
+
+    private void InputEvent_PropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e) =>
+        Refresh();
+}
 
 public enum PressDurationKind
 {

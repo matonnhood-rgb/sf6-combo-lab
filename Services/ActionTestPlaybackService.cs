@@ -171,7 +171,7 @@ public sealed class ActionTestPlaybackService
         (actionDefinition.InputEvents ?? [])
             .OrderBy(item => item.Frame)
             .Select(item =>
-                $"{item.Frame}F: "
+                $"{item.DisplayFrame}F display / {item.Frame}F internal: "
                 + FormatInputNames(item.LogicalInputs))
             .ToArray();
 

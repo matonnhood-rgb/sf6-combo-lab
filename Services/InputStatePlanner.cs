@@ -27,8 +27,9 @@ public sealed class InputStatePlanner
         {
             var keys = ParseKeys(inputEvent);
             var releaseFrame = inputEvent.Frame
-                + holdDuration.Value.TotalSeconds
-                * ActionTestPlaybackService.FramesPerSecond;
+                + (inputEvent.DurationFrames
+                    ?? holdDuration.Value.TotalSeconds
+                    * ActionTestPlaybackService.FramesPerSecond);
             foreach (var key in keys)
             {
                 operations.Add(new StateOperation(inputEvent.Frame, key, true));
@@ -142,7 +143,8 @@ public sealed class InputStatePlanner
                 var keys = resolveResult.Keys.Count == 0
                     ? "none"
                     : string.Join(", ", resolveResult.Keys.Select(key => key.DisplayName));
-                return $"{item.Frame}F: {item.LogicalInputsText} -> {tokens} -> {keys}";
+                return $"{item.DisplayFrame}F display / {item.Frame}F internal: "
+                    + $"{item.LogicalInputsText} -> {tokens} -> {keys}";
             })
             .ToArray();
 

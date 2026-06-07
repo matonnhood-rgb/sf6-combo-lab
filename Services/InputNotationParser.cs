@@ -1,4 +1,4 @@
-namespace ComboLab.Services;
+﻿namespace ComboLab.Services;
 
 public sealed class InputNotationParser
 {
@@ -65,7 +65,7 @@ public sealed class InputNotationParser
             {
                 errors.Add(new InputParseError(
                     segment,
-                    $"`{segment}` はコンボ表記です。入力イベントでは、各フレームに分けて `2` / `3` / `6mp` のように入力してください。"));
+                    $"`{segment}` はコマンド表記です。入力イベントでは `2` / `3` / `6mp` のようにフレームごとに分けてください。"));
                 return;
             }
 
@@ -105,3 +105,4 @@ public enum InputTokenKind
     Logical,
     Physical
 }
+
