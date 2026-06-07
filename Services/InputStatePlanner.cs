@@ -4,6 +4,19 @@ namespace ComboLab.Services;
 
 public sealed class InputStatePlanner
 {
+    private readonly InputNotationParser _parser = new();
+    private readonly KeyMapResolver _resolver;
+
+    public InputStatePlanner()
+        : this(new KeyMapResolver(KeyMapDefaults.CreateLibrary().Profiles[0]))
+    {
+    }
+
+    public InputStatePlanner(KeyMapResolver resolver)
+    {
+        _resolver = resolver;
+    }
+
     public IReadOnlyList<InputBoundaryEvent> Build(
         ActionDefinition actionDefinition,
         KeyPressDuration holdDuration)
@@ -12,7 +25,7 @@ public sealed class InputStatePlanner
         foreach (var inputEvent in (actionDefinition.InputEvents ?? [])
                      .OrderBy(item => item.Frame))
         {
-            var keys = ParseKeys(inputEvent.LogicalInputs);
+            var keys = ParseKeys(inputEvent);
             var releaseFrame = inputEvent.Frame
                 + holdDuration.Value.TotalSeconds
                 * ActionTestPlaybackService.FramesPerSecond;
@@ -88,16 +101,73 @@ public sealed class InputStatePlanner
             .GroupBy(item => item.Key)
             .ToDictionary(item => item.Key, item => item.Count());
 
-    private static IReadOnlyList<PhysicalKey> ParseKeys(
-        IEnumerable<string>? logicalInputs) =>
-        (logicalInputs ?? [])
-            .Select(input =>
-                PhysicalKeyNameParser.TryParse(input, out var key)
-                    ? key
-                    : (PhysicalKey?)null)
-            .OfType<PhysicalKey>()
-            .Distinct()
+    public IReadOnlyList<InputResolutionIssue> Validate(
+        ActionDefinition actionDefinition)
+    {
+        var issues = new List<InputResolutionIssue>();
+        foreach (var inputEvent in actionDefinition.InputEvents ?? [])
+        {
+            var parseResult = _parser.ParseMany(inputEvent.LogicalInputs);
+            issues.AddRange(parseResult.Errors.Select(error =>
+                new InputResolutionIssue(
+                    inputEvent.Frame,
+                    error.Source,
+                    error.Message)));
+
+            var resolveResult = _resolver.Resolve(parseResult.Tokens);
+            issues.AddRange(resolveResult.Errors.Select(error =>
+                new InputResolutionIssue(
+                    inputEvent.Frame,
+                    error.Source,
+                    error.Message)));
+        }
+
+        return issues;
+    }
+
+    public IReadOnlyList<string> FormatResolvedInputEvents(
+        ActionDefinition actionDefinition) =>
+        (actionDefinition.InputEvents ?? [])
+            .OrderBy(item => item.Frame)
+            .Select(item =>
+            {
+                var parseResult = _parser.ParseMany(item.LogicalInputs);
+                var resolveResult = _resolver.Resolve(parseResult.Tokens);
+                var tokens = parseResult.Tokens.Count == 0
+                    ? "none"
+                    : string.Join(" + ", parseResult.Tokens.Select(token =>
+                        token.Kind == InputTokenKind.Physical
+                            ? $"key:{token.Value}"
+                            : token.Value));
+                var keys = resolveResult.Keys.Count == 0
+                    ? "none"
+                    : string.Join(", ", resolveResult.Keys.Select(key => key.DisplayName));
+                return $"{item.Frame}F: {item.LogicalInputsText} -> {tokens} -> {keys}";
+            })
             .ToArray();
+
+    private IReadOnlyList<PhysicalKey> ParseKeys(InputEvent inputEvent)
+    {
+        var parseResult = _parser.ParseMany(inputEvent.LogicalInputs);
+        var resolveResult = _resolver.Resolve(parseResult.Tokens);
+        var issues = parseResult.Errors
+            .Select(error => new InputResolutionIssue(
+                inputEvent.Frame,
+                error.Source,
+                error.Message))
+            .Concat(resolveResult.Errors.Select(error =>
+                new InputResolutionIssue(
+                    inputEvent.Frame,
+                    error.Source,
+                    error.Message)))
+            .ToArray();
+        if (issues.Length > 0)
+        {
+            throw new InputResolutionException(issues);
+        }
+
+        return resolveResult.Keys;
+    }
 
     private static double NormalizeFrame(double frame) =>
         Math.Round(frame, 5, MidpointRounding.AwayFromZero);
@@ -114,3 +184,22 @@ public sealed record InputBoundaryEvent(
     IReadOnlyList<PhysicalKey> KeysToPress,
     IReadOnlyList<PhysicalKey> KeysToKeep,
     IReadOnlyList<PhysicalKey> StateAfter);
+
+public sealed record InputResolutionIssue(
+    int Frame,
+    string Source,
+    string Message)
+{
+    public override string ToString() => $"{Frame}F: {Source}: {Message}";
+}
+
+public sealed class InputResolutionException : Exception
+{
+    public InputResolutionException(IReadOnlyList<InputResolutionIssue> issues)
+        : base("入力表記またはキーマップを解決できません。")
+    {
+        Issues = issues;
+    }
+
+    public IReadOnlyList<InputResolutionIssue> Issues { get; }
+}

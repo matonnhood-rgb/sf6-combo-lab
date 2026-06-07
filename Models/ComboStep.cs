@@ -36,9 +36,22 @@ public sealed class ComboStep : ObservableObject
     public int? InputFrame
     {
         get => _inputFrame;
-        set => SetProperty(
-            ref _inputFrame,
-            value is null ? null : Math.Max(0, value.Value));
+        set
+        {
+            if (SetProperty(
+                    ref _inputFrame,
+                    value is null ? null : Math.Max(0, value.Value)))
+            {
+                OnPropertyChanged(nameof(DisplayInputFrame));
+            }
+        }
+    }
+
+    [JsonIgnore]
+    public int? DisplayInputFrame
+    {
+        get => InputFrame is null ? null : InputFrame.Value + 1;
+        set => InputFrame = value is null ? null : Math.Max(1, value.Value) - 1;
     }
 
     public string ActionName

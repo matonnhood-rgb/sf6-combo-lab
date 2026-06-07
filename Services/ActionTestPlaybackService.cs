@@ -10,12 +10,22 @@ public sealed class ActionTestPlaybackService
     public const double MillisecondsPerFrame = 1000 / FramesPerSecond;
 
     private readonly IKeyboardInputSender _keyboardInputSender;
+    private KeyMapResolver _keyMapResolver;
     private readonly object _activeKeysLock = new();
     private readonly HashSet<PhysicalKey> _activeKeys = [];
 
-    public ActionTestPlaybackService(IKeyboardInputSender keyboardInputSender)
+    public ActionTestPlaybackService(
+        IKeyboardInputSender keyboardInputSender,
+        KeyMapResolver? keyMapResolver = null)
     {
         _keyboardInputSender = keyboardInputSender;
+        _keyMapResolver = keyMapResolver
+            ?? new KeyMapResolver(KeyMapDefaults.CreateLibrary().Profiles[0]);
+    }
+
+    public void SetKeyMapResolver(KeyMapResolver keyMapResolver)
+    {
+        _keyMapResolver = keyMapResolver;
     }
 
     public Task PlayAsync(
@@ -24,7 +34,10 @@ public sealed class ActionTestPlaybackService
         CancellationToken cancellationToken = default,
         Action<string>? playbackLog = null)
     {
-        var plan = BuildPlaybackPlan(actionDefinition, holdDuration);
+        var plan = BuildPlaybackPlan(
+            actionDefinition,
+            holdDuration,
+            _keyMapResolver);
         if (plan.Count == 0)
         {
             throw new InvalidOperationException(
@@ -66,7 +79,10 @@ public sealed class ActionTestPlaybackService
         CancellationToken cancellationToken = default,
         Action<string>? playbackLog = null)
     {
-        var plan = BuildPlaybackPlan(actionDefinition, holdDuration);
+        var plan = BuildPlaybackPlan(
+            actionDefinition,
+            holdDuration,
+            _keyMapResolver);
         if (plan.Count == 0)
         {
             throw new InvalidOperationException(
@@ -113,9 +129,12 @@ public sealed class ActionTestPlaybackService
 
     public static IReadOnlyList<PlaybackPlanItem> BuildPlaybackPlan(
         ActionDefinition actionDefinition,
-        KeyPressDuration holdDuration)
+        KeyPressDuration holdDuration,
+        KeyMapResolver? keyMapResolver = null)
     {
-        var planner = new InputStatePlanner();
+        var planner = new InputStatePlanner(
+            keyMapResolver
+            ?? new KeyMapResolver(KeyMapDefaults.CreateLibrary().Profiles[0]));
         return planner.Build(actionDefinition, holdDuration)
             .Select(boundary => new PlaybackPlanItem(
                 FrameToTime(boundary.LogicalFrame),
@@ -125,6 +144,26 @@ public sealed class ActionTestPlaybackService
                 boundary.KeysToKeep,
                 boundary.StateAfter))
             .ToArray();
+    }
+
+    public static IReadOnlyList<InputResolutionIssue> ValidateInputEvents(
+        ActionDefinition actionDefinition,
+        KeyMapResolver? keyMapResolver = null)
+    {
+        var planner = new InputStatePlanner(
+            keyMapResolver
+            ?? new KeyMapResolver(KeyMapDefaults.CreateLibrary().Profiles[0]));
+        return planner.Validate(actionDefinition);
+    }
+
+    public static IReadOnlyList<string> FormatResolvedInputEvents(
+        ActionDefinition actionDefinition,
+        KeyMapResolver? keyMapResolver = null)
+    {
+        var planner = new InputStatePlanner(
+            keyMapResolver
+            ?? new KeyMapResolver(KeyMapDefaults.CreateLibrary().Profiles[0]));
+        return planner.FormatResolvedInputEvents(actionDefinition);
     }
 
     public static IReadOnlyList<string> FormatInputEvents(
@@ -172,13 +211,10 @@ public sealed class ActionTestPlaybackService
     }
 
     public static IReadOnlyList<string> FindUnsupportedKeyNames(
-        ActionDefinition actionDefinition) =>
-        (actionDefinition.InputEvents ?? [])
-            .SelectMany(inputEvent => inputEvent.LogicalInputs ?? [])
-            .Where(input => !PhysicalKeyNameParser.IsNeutral(input))
-            .Where(input => !PhysicalKeyNameParser.TryParse(input, out _))
-            .Select(input => input.Trim())
-            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+        ActionDefinition actionDefinition,
+        KeyMapResolver? keyMapResolver = null) =>
+        ValidateInputEvents(actionDefinition, keyMapResolver)
+            .Select(issue => issue.ToString())
             .ToArray();
 
     private KeyboardSendResult SendChanges(

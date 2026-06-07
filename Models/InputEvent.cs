@@ -11,7 +11,20 @@ public sealed class InputEvent : ObservableObject
     public int Frame
     {
         get => _frame;
-        set => SetProperty(ref _frame, Math.Max(0, value));
+        set
+        {
+            if (SetProperty(ref _frame, Math.Max(0, value)))
+            {
+                OnPropertyChanged(nameof(DisplayFrame));
+            }
+        }
+    }
+
+    [JsonIgnore]
+    public int DisplayFrame
+    {
+        get => Frame + 1;
+        set => Frame = Math.Max(1, value) - 1;
     }
 
     public ObservableCollection<string> LogicalInputs

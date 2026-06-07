@@ -7,6 +7,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly ComboLibraryMigrationService _migrationService = new();
     private readonly ShareTextService _shareTextService = new();
     private readonly RecentComboFileService _recentComboFileService = new();
+    private readonly KeyMapProfileStorageService _keyMapStorageService = new();
     private readonly WindowsSendInputKeyboardSender _keyboardInputSender = new();
     private readonly PlaybackLogFileService _playbackLogFileService = new();
     private readonly ActionTestPlaybackService _testPlaybackService;
@@ -50,6 +52,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private int _requiredPresentSamples = 10;
     private PresentDropBehavior _selectedPresentDropBehavior =
         PresentDropBehavior.Continue;
+    private KeyMapProfileLibrary _keyMapLibrary = KeyMapDefaults.CreateLibrary();
+    private KeyMapProfile _activeKeyMapProfile =
+        KeyMapDefaults.CreateLibrary().Profiles[0];
+    private KeyMapBindingRow? _selectedKeyMapBindingRow;
     private readonly List<string> _currentPlaybackLogLines = [];
 
     public MainWindow()
@@ -66,6 +72,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ObservableCollection<string> ActionNames { get; } = [];
+
+    public ObservableCollection<KeyMapBindingRow> KeyMapBindingRows { get; } = [];
+
+    public ObservableCollection<string> KeyMapPreviewLines { get; } = [];
+
+    public KeyMapBindingRow? SelectedKeyMapBindingRow
+    {
+        get => _selectedKeyMapBindingRow;
+        set
+        {
+            _selectedKeyMapBindingRow = value;
+            OnPropertyChanged();
+        }
+    }
 
     public IReadOnlyList<KeyboardSendModeOption> KeyboardSendModeOptions { get; } =
     [
@@ -98,6 +118,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         new("停止", PresentDropBehavior.Stop),
         new("再同期", PresentDropBehavior.Resynchronize)
     ];
+
+    public KeyMapProfile ActiveKeyMapProfile
+    {
+        get => _activeKeyMapProfile;
+        set
+        {
+            _activeKeyMapProfile = value;
+            OnPropertyChanged();
+            RefreshKeyMapRows();
+            RefreshActiveKeyMapResolver();
+        }
+    }
 
     public bool IsPresentSyncEnabled
     {
@@ -421,6 +453,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
+            await LoadKeyMapsAsync();
             var startupFile =
                 await _recentComboFileService.FindStartupFileAsync();
             if (startupFile is null)
@@ -439,6 +472,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 + "空の状態で起動します。",
                 exception);
         }
+    }
+
+    private async Task LoadKeyMapsAsync()
+    {
+        _keyMapLibrary = await _keyMapStorageService.LoadOrCreateAsync();
+        ActiveKeyMapProfile = _keyMapLibrary.Profiles.FirstOrDefault(
+                profile => profile.Id == _keyMapLibrary.ActiveProfileId)
+            ?? _keyMapLibrary.Profiles[0];
+        SetStatus("キーマップ設定を読み込みました。");
     }
 
     private async Task LoadFromFileAsync(
@@ -734,12 +776,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        InputEventGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-        InputEventGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        CommitInputEventEditing();
 
+        var actionDefinition = CreatePlaybackSnapshot(SelectedActionDefinition);
+        var keyMapResolver = new KeyMapResolver(
+            CreateKeyMapSnapshot(ActiveKeyMapProfile));
         var unsupportedNames =
             ActionTestPlaybackService.FindUnsupportedKeyNames(
-                SelectedActionDefinition);
+                actionDefinition,
+                keyMapResolver);
+        if (unsupportedNames.Count > 0)
+        {
+            MessageBox.Show(
+                this,
+                "入力表記またはキーマップに問題があります。\n\n"
+                + string.Join(Environment.NewLine, unsupportedNames),
+                "テスト再生",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            SetStatus("入力表記またはキーマップを確認してください。");
+            return;
+        }
+
         if (unsupportedNames.Count > 0)
         {
             MessageBox.Show(
@@ -754,7 +812,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var actionDefinition = SelectedActionDefinition;
         var sendMode = SelectedKeyboardSendMode;
         var startDelaySeconds = SelectedStartDelaySeconds;
         if (!TryGetPressDuration(out var pressDuration))
@@ -772,7 +829,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         TestPlaybackLogText.Clear();
         var playbackPlan = ActionTestPlaybackService.BuildPlaybackPlan(
             actionDefinition,
-            pressDuration);
+            pressDuration,
+            keyMapResolver);
         AppendTestPlaybackLog(
             $"[Start] time={DateTime.Now:O} "
             + $"action={actionDefinition.ActionName} "
@@ -784,6 +842,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AppendTestPlaybackLog("[InputEvents]");
         foreach (var line in ActionTestPlaybackService.FormatInputEvents(
                      actionDefinition))
+        {
+            AppendTestPlaybackLog(line);
+        }
+
+        AppendTestPlaybackLog(string.Empty);
+        AppendTestPlaybackLog("[Resolve]");
+        foreach (var line in ActionTestPlaybackService.FormatResolvedInputEvents(
+                     actionDefinition,
+                     keyMapResolver))
         {
             AppendTestPlaybackLog(line);
         }
@@ -1169,7 +1236,342 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         StartDelayComboBox.IsEnabled = enabled;
         PresentSyncEnabledCheckBox.IsEnabled = enabled;
         PresentSyncSettingsPanel.IsEnabled = enabled;
+        InputEventEditButtonsPanel.IsEnabled = enabled;
+        InputEventGrid.IsEnabled = enabled;
     }
+
+    private void CommitInputEventEditing()
+    {
+        UpdateFocusedBindingSource();
+        InputEventGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+        InputEventGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        UpdateFocusedBindingSource();
+    }
+
+    private static void UpdateFocusedBindingSource()
+    {
+        if (Keyboard.FocusedElement is not DependencyObject focusedElement)
+        {
+            return;
+        }
+
+        if (focusedElement is TextBox textBox)
+        {
+            textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            return;
+        }
+
+        if (focusedElement is ComboBox comboBox)
+        {
+            comboBox.GetBindingExpression(ComboBox.TextProperty)?.UpdateSource();
+            comboBox.GetBindingExpression(Selector.SelectedValueProperty)
+                ?.UpdateSource();
+            comboBox.GetBindingExpression(Selector.SelectedItemProperty)
+                ?.UpdateSource();
+        }
+    }
+
+    private static ActionDefinition CreatePlaybackSnapshot(
+        ActionDefinition source) =>
+        new()
+        {
+            Id = source.Id,
+            ActionName = source.ActionName,
+            Description = source.Description,
+            InputEvents = new ObservableCollection<Models.InputEvent>(
+                source.InputEvents.Select(CloneInputEvent))
+        };
+
+    private static Models.InputEvent CloneInputEvent(
+        Models.InputEvent source) =>
+        new()
+        {
+            Frame = source.Frame,
+            LogicalInputs = new ObservableCollection<string>(
+                source.LogicalInputs)
+        };
+
+    private static KeyMapProfile CreateKeyMapSnapshot(KeyMapProfile source)
+    {
+        var bindings =
+            new ObservableDictionary<string, ObservableCollection<string>>();
+        foreach (var binding in source.Bindings)
+        {
+            bindings[binding.Key] = new ObservableCollection<string>(
+                binding.Value);
+        }
+
+        return new KeyMapProfile
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Bindings = bindings
+        };
+    }
+
+    private void RefreshActiveKeyMapResolver()
+    {
+        _testPlaybackService.SetKeyMapResolver(
+            new KeyMapResolver(ActiveKeyMapProfile));
+        RefreshKeyMapPreview();
+    }
+
+    private void RefreshKeyMapRows()
+    {
+        KeyMapBindingRows.Clear();
+        foreach (var action in ActiveKeyMapProfile.Bindings.Keys
+                     .OrderBy(GetKeyMapSortOrder)
+                     .ThenBy(action => action, StringComparer.OrdinalIgnoreCase))
+        {
+            ActiveKeyMapProfile.Bindings.TryGetValue(action, out var bindings);
+            KeyMapBindingRows.Add(new KeyMapBindingRow(
+                action,
+                string.Join(", ", bindings ?? [])));
+        }
+
+        RefreshKeyMapPreview();
+    }
+
+    private void RefreshKeyMapPreview()
+    {
+        KeyMapPreviewLines.Clear();
+        var resolver = new KeyMapResolver(ActiveKeyMapProfile);
+        foreach (var line in resolver.FormatPreviewDirections())
+        {
+            KeyMapPreviewLines.Add(line);
+        }
+    }
+
+    private async void SaveKeyMap_Click(object sender, RoutedEventArgs e)
+    {
+        var invalidKeys = new List<string>();
+        var invalidActions = new List<string>();
+        var duplicateActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenActions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in KeyMapBindingRows)
+        {
+            var action = KeyMapDefaults.NormalizeActionName(row.Action);
+            if (string.IsNullOrWhiteSpace(action)
+                || KeyMapDefaults.GeneratedActions.Contains(
+                    action,
+                    StringComparer.OrdinalIgnoreCase))
+            {
+                invalidActions.Add(row.Action);
+            }
+
+            if (!seenActions.Add(action))
+            {
+                duplicateActions.Add(action);
+            }
+
+            var keys = ParseKeyMapKeys(row.KeysText);
+            invalidKeys.AddRange(keys.Where(key =>
+                !PhysicalKeyNameParser.IsNeutral(key)
+                && !PhysicalKeyNameParser.TryParse(key, out _)));
+        }
+
+        if (invalidActions.Count > 0 || duplicateActions.Count > 0)
+        {
+            MessageBox.Show(
+                this,
+                "入力項目に問題があります。\n\n"
+                + (invalidActions.Count == 0
+                    ? string.Empty
+                    : "空欄、または自動生成される 1/3/5/7/9 は保存できません。\n"
+                      + string.Join(", ", invalidActions))
+                + (duplicateActions.Count == 0
+                    ? string.Empty
+                    : "\n重複: "
+                      + string.Join(", ", duplicateActions)),
+                "キーマップ設定",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (invalidKeys.Count > 0)
+        {
+            MessageBox.Show(
+                this,
+                "キーマップに認識できない物理キーがあります。\n\n"
+                + string.Join(", ", invalidKeys.Distinct(StringComparer.OrdinalIgnoreCase)),
+                "キーマップ設定",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        ActiveKeyMapProfile.Bindings.Clear();
+        foreach (var row in KeyMapBindingRows)
+        {
+            ActiveKeyMapProfile.Bindings[KeyMapDefaults.NormalizeActionName(row.Action)] =
+                new ObservableCollection<string>(ParseKeyMapKeys(row.KeysText));
+        }
+
+        _keyMapLibrary.ActiveProfileId = ActiveKeyMapProfile.Id;
+        await _keyMapStorageService.SaveAsync(_keyMapLibrary);
+        RefreshKeyMapRows();
+        RefreshActiveKeyMapResolver();
+        SetStatus("キーマップ設定を保存しました。");
+    }
+
+    private async void ResetKeyMap_Click(object sender, RoutedEventArgs e)
+    {
+        ActiveKeyMapProfile.Bindings = KeyMapDefaults.CreateDefaultBindings();
+        RefreshKeyMapRows();
+        await _keyMapStorageService.SaveAsync(_keyMapLibrary);
+        RefreshActiveKeyMapResolver();
+        SetStatus("キーマップ設定をデフォルトに戻しました。");
+    }
+
+    private void AddKeyMapBinding_Click(object sender, RoutedEventArgs e)
+    {
+        var row = new KeyMapBindingRow(CreateNewKeyMapActionName(), string.Empty);
+        KeyMapBindingRows.Add(row);
+        SelectedKeyMapBindingRow = row;
+        KeyMapGrid.ScrollIntoView(row);
+        KeyMapGrid.Focus();
+    }
+
+    private void DeleteKeyMapBinding_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedKeyMapBindingRow is null)
+        {
+            return;
+        }
+
+        var index = KeyMapBindingRows.IndexOf(SelectedKeyMapBindingRow);
+        KeyMapBindingRows.Remove(SelectedKeyMapBindingRow);
+        SelectedKeyMapBindingRow = KeyMapBindingRows.Count == 0
+            ? null
+            : KeyMapBindingRows[Math.Min(index, KeyMapBindingRows.Count - 1)];
+    }
+
+    private void KeyMapKeyTextBox_PreviewKeyDown(
+        object sender,
+        KeyEventArgs e)
+    {
+        if (sender is not TextBox textBox
+            || !TryGetPhysicalKeyName(e, out var keyName))
+        {
+            return;
+        }
+
+        textBox.Text = keyName;
+        textBox.CaretIndex = textBox.Text.Length;
+        e.Handled = true;
+    }
+
+    private string CreateNewKeyMapActionName()
+    {
+        for (var index = 1; index < 1000; index++)
+        {
+            var candidate = $"input{index}";
+            if (!KeyMapBindingRows.Any(row => string.Equals(
+                    row.Action,
+                    candidate,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                return candidate;
+            }
+        }
+
+        return $"input{DateTime.Now:HHmmss}";
+    }
+
+    private static IReadOnlyList<string> ParseKeyMapKeys(string? text) =>
+        (text ?? string.Empty)
+            .Split(new[] { ',', '、' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(item => item.Trim())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static int GetKeyMapSortOrder(string action)
+    {
+        var index = KeyMapDefaults.DefaultActions
+            .Select((item, itemIndex) => new { item, itemIndex })
+            .FirstOrDefault(item => string.Equals(
+                item.item,
+                action,
+                StringComparison.OrdinalIgnoreCase))
+            ?.itemIndex;
+        return index ?? 1000;
+    }
+
+    private static bool TryGetPhysicalKeyName(
+        KeyEventArgs e,
+        out string keyName)
+    {
+        keyName = string.Empty;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            keyName = "Ctrl";
+            return true;
+        }
+
+        if (key is Key.LeftShift or Key.RightShift)
+        {
+            keyName = "Shift";
+            return true;
+        }
+
+        if (key is Key.LeftAlt or Key.RightAlt)
+        {
+            keyName = "Alt";
+            return true;
+        }
+
+        if (key is >= Key.A and <= Key.Z)
+        {
+            keyName = key.ToString();
+            return true;
+        }
+
+        if (key is >= Key.D0 and <= Key.D9)
+        {
+            keyName = ((int)(key - Key.D0)).ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        if (key is >= Key.F1 and <= Key.F24)
+        {
+            keyName = key.ToString();
+            return true;
+        }
+
+        keyName = key switch
+        {
+            Key.Space => "Space",
+            Key.Enter or Key.Return => "Enter",
+            Key.Escape => "Esc",
+            Key.Tab => "Tab",
+            Key.Up => "Up",
+            Key.Down => "Down",
+            Key.Left => "Left",
+            Key.Right => "Right",
+            _ => string.Empty
+        };
+
+        return !string.IsNullOrWhiteSpace(keyName);
+    }
+
+    private static string GetKeyMapActionDisplay(string action) =>
+        action switch
+        {
+            "2" => "2 下",
+            "4" => "4 左",
+            "6" => "6 右",
+            "8" => "8 上",
+            "lp" => "lp 弱P",
+            "mp" => "mp 中P",
+            "hp" => "hp 強P",
+            "lk" => "lk 弱K",
+            "mk" => "mk 中K",
+            "hk" => "hk 強K",
+            _ => action
+        };
 
     private static string GetKeyboardSendModeDisplay(
         KeyboardSendMode sendMode) =>
@@ -1517,6 +1919,56 @@ public sealed record PressDurationOption(
 public sealed record StartDelayOption(
     string DisplayName,
     int Seconds);
+
+public sealed class KeyMapBindingRow : INotifyPropertyChanged
+{
+    private string _action;
+    private string _keysText;
+
+    public KeyMapBindingRow(
+        string action,
+        string keysText)
+    {
+        _action = action;
+        _keysText = keysText;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Action
+    {
+        get => _action;
+        set
+        {
+            if (_action == value)
+            {
+                return;
+            }
+
+            _action = value;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(Action)));
+        }
+    }
+
+    public string KeysText
+    {
+        get => _keysText;
+        set
+        {
+            if (_keysText == value)
+            {
+                return;
+            }
+
+            _keysText = value;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(KeysText)));
+        }
+    }
+}
 
 public sealed record PresentDropBehaviorOption(
     string DisplayName,
