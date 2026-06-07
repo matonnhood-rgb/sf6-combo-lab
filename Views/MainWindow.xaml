@@ -351,7 +351,8 @@
                                 <StackPanel DockPanel.Dock="Top"
                                             Margin="0,0,0,8">
                                     <WrapPanel x:Name="InputEventEditButtonsPanel"
-                                               Margin="0,0,0,6">
+                                               Margin="0,0,0,6"
+                                               Visibility="Collapsed">
                                         <TextBlock Text="入力イベント"
                                                    FontSize="17"
                                                    FontWeight="SemiBold"
@@ -362,23 +363,57 @@
                                         <Button Content="上へ" Click="MoveInputEventUp_Click"/>
                                         <Button Content="下へ" Click="MoveInputEventDown_Click"/>
                                     </WrapPanel>
+                                    <Border BorderBrush="#CBD5E1"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            Background="#F8FAFC"
+                                            Padding="10"
+                                            Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="入力イベント概要"
+                                                           FontSize="17"
+                                                           FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding DataContext.InputEventSummaryText, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                           Margin="0,4,0,0"
+                                                           Foreground="#475569"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                            <Button x:Name="OpenInputNodeEditorButton"
+                                                    Grid.Column="1"
+                                                    Content="ノード編集を開く"
+                                                    Margin="16,0,0,0"
+                                                    Padding="16,6"
+                                                    VerticalAlignment="Center"
+                                                    Click="OpenInputNodeEditor_Click"/>
+                                        </Grid>
+                                    </Border>
+
                                     <WrapPanel>
                                         <TextBlock Text="送信方式:"
                                                    VerticalAlignment="Center"
-                                                   Margin="0,0,4,0"/>
+                                                   Margin="0,0,4,0"
+                                                   Visibility="Collapsed"/>
                                         <ComboBox x:Name="KeyboardSendModeComboBox"
                                                   Width="140"
                                                   Margin="0,0,8,0"
+                                                  Visibility="Collapsed"
                                                   ItemsSource="{Binding DataContext.KeyboardSendModeOptions, RelativeSource={RelativeSource AncestorType=Window}}"
                                                   DisplayMemberPath="DisplayName"
                                                   SelectedValuePath="Value"
                                                   SelectedValue="{Binding DataContext.SelectedKeyboardSendMode, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"/>
                                         <TextBlock Text="保持時間:"
                                                    VerticalAlignment="Center"
-                                                   Margin="0,0,4,0"/>
+                                                   Margin="0,0,4,0"
+                                                   Visibility="Collapsed"/>
                                         <ComboBox x:Name="PressDurationComboBox"
                                                   Width="82"
                                                   Margin="0,0,4,0"
+                                                  Visibility="Collapsed"
                                                   ItemsSource="{Binding DataContext.PressDurationOptions, RelativeSource={RelativeSource AncestorType=Window}}"
                                                   DisplayMemberPath="DisplayName"
                                                   SelectedValuePath="Value"
@@ -386,12 +421,14 @@
                                         <TextBox x:Name="CustomPressMillisecondsTextBox"
                                                  Width="62"
                                                  Margin="0,0,4,0"
+                                                 Visibility="Collapsed"
                                                  ToolTip="ms指定を選んだ場合の保持時間"
                                                  IsEnabled="{Binding DataContext.IsCustomPressDuration, RelativeSource={RelativeSource AncestorType=Window}}"
                                                  Text="{Binding DataContext.CustomPressMilliseconds, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=PropertyChanged}"/>
                                         <TextBlock Text="ms"
                                                    VerticalAlignment="Center"
-                                                   Margin="0,0,8,0"/>
+                                                   Margin="0,0,8,0"
+                                                   Visibility="Collapsed"/>
                                         <TextBlock Text="開始待ち:"
                                                    VerticalAlignment="Center"
                                                    Margin="0,0,4,0"/>
@@ -411,7 +448,8 @@
                                                 Click="CancelTestPlayback_Click"/>
                                     </WrapPanel>
                                     <WrapPanel x:Name="PresentSyncSettingsPanel"
-                                               Margin="0,6,0,0">
+                                               Margin="0,6,0,0"
+                                               Visibility="Collapsed">
                                         <CheckBox x:Name="PresentSyncEnabledCheckBox"
                                                   Content="Present同期"
                                                   VerticalAlignment="Center"
@@ -460,7 +498,8 @@
                                                   SelectedValuePath="Value"
                                                   SelectedValue="{Binding DataContext.SelectedPresentDropBehavior, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"/>
                                     </WrapPanel>
-                                    <WrapPanel Margin="2,5,0,0">
+                                    <WrapPanel Margin="2,5,0,0"
+                                               Visibility="Collapsed">
                                         <TextBlock x:Name="PresentSyncStatusText"
                                                    Text="Sync: OFF"
                                                    FontWeight="SemiBold"
@@ -479,6 +518,7 @@
                                          DockPanel.Dock="Bottom"
                                          Height="92"
                                          Margin="0,8,0,0"
+                                         Visibility="Collapsed"
                                          IsReadOnly="True"
                                          AcceptsReturn="True"
                                          TextWrapping="NoWrap"
@@ -497,7 +537,8 @@
                                             BorderBrush="#D0D0D0"
                                             BorderThickness="1"
                                             CornerRadius="4"
-                                            Padding="8">
+                                            Padding="8"
+                                            Visibility="Collapsed">
                                         <Grid>
                                             <Grid.RowDefinitions>
                                                 <RowDefinition Height="*"/>
@@ -733,6 +774,7 @@
 
                                     <DataGrid x:Name="InputEventGrid"
                                               Grid.Row="2"
+                                              Visibility="Collapsed"
                                               ItemsSource="{Binding InputEvents}"
                                               SelectedItem="{Binding DataContext.SelectedInputEvent, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"
                                               AutoGenerateColumns="False"

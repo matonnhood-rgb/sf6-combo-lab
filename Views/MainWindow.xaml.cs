@@ -64,6 +64,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private InputNodeRow? _selectedInputNodeRow;
     private bool _isSynchronizingInputSelection;
     private InputTimelineDragState? _inputTimelineDragState;
+    private InputNodeEditorWindow? _inputNodeEditorWindow;
     private bool _isInputTimelineDragPreviewVisible;
     private double _inputTimelineDragPreviewLeft;
     private double _inputTimelineDragPreviewTop;
@@ -94,6 +95,36 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public ObservableCollection<InputNodeRow> InputNodeRows { get; } = [];
 
     public ObservableCollection<InputTimelineTick> InputTimelineTicks { get; } = [];
+
+    public string InputEventSummaryText
+    {
+        get
+        {
+            if (SelectedActionDefinition is null)
+            {
+                return "アクションを選択してください。";
+            }
+
+            if (SelectedActionDefinition.InputEvents.Count == 0)
+            {
+                return "入力イベントはまだありません。ノード編集画面で追加できます。";
+            }
+
+            var preview = SelectedActionDefinition.InputEvents
+                .OrderBy(item => item.Frame)
+                .Take(5)
+                .Select(item =>
+                    $"{item.DisplayFrame}F:{InputNodeEditorLogic.FormatNode(item)}"
+                    + $"({item.DurationFrames ?? 1}F)")
+                .ToArray();
+            var suffix = SelectedActionDefinition.InputEvents.Count > preview.Length
+                ? $" ほか{SelectedActionDefinition.InputEvents.Count - preview.Length}件"
+                : string.Empty;
+            return $"{SelectedActionDefinition.InputEvents.Count}件 / "
+                   + string.Join("、", preview)
+                   + suffix;
+        }
+    }
 
     public double InputTimelineWidth =>
         Math.Max(
@@ -458,11 +489,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             DetachSelectedActionInputEvents();
+            CloseInputNodeEditorWindow();
             _selectedActionDefinition = value;
             SelectedInputEvent = null;
             AttachSelectedActionInputEvents();
             RefreshInputNodeRows();
             OnPropertyChanged();
+            OnPropertyChanged(nameof(InputEventSummaryText));
             ActionEditorPanel.IsEnabled = value is not null;
 
             if (value is not null)
@@ -831,6 +864,61 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SetStatus("アクション定義を削除しました。");
     }
 
+    private void OpenInputNodeEditor_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedActionDefinition is null)
+        {
+            SetStatus("入力ノードを編集するアクションを選択してください。");
+            return;
+        }
+
+        if (_inputNodeEditorWindow is not null)
+        {
+            _inputNodeEditorWindow.Activate();
+            return;
+        }
+
+        _inputNodeEditorWindow = new InputNodeEditorWindow(
+            SelectedActionDefinition,
+            () => ActiveKeyMapProfile,
+            RequestTestPlaybackFromInputNodeEditor)
+        {
+            Owner = this
+        };
+        _inputNodeEditorWindow.Closed += (_, _) =>
+        {
+            _inputNodeEditorWindow = null;
+            CommitInputEventEditing();
+            RefreshInputNodeRows();
+            OnPropertyChanged(nameof(InputEventSummaryText));
+        };
+        _inputNodeEditorWindow.SetEditingEnabled(!_isTestPlaybackRunning);
+        _inputNodeEditorWindow.Show();
+    }
+
+    private void CloseInputNodeEditorWindow()
+    {
+        if (_inputNodeEditorWindow is null)
+        {
+            return;
+        }
+
+        var window = _inputNodeEditorWindow;
+        _inputNodeEditorWindow = null;
+        window.Close();
+    }
+
+    private void RequestTestPlaybackFromInputNodeEditor()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(RequestTestPlaybackFromInputNodeEditor);
+            return;
+        }
+
+        TestPlayback_Click(this, new RoutedEventArgs());
+    }
+
     private void AddInputEvent_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedActionDefinition is null)
@@ -1163,6 +1251,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         CommitInputEventEditing();
+        SelectedKeyboardSendMode = KeyboardSendMode.ScanCode;
+        SelectedPressDuration = PressDurationKind.Frames1;
+        IsPresentSyncEnabled = false;
 
         var actionDefinition = CreatePlaybackSnapshot(SelectedActionDefinition);
         var keyMapResolver = new KeyMapResolver(
@@ -1643,6 +1734,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         InputEventEditButtonsPanel.IsEnabled = enabled;
         InputEventGrid.IsEnabled = enabled;
         InputNodeEditorPanel.IsEnabled = enabled;
+        _inputNodeEditorWindow?.SetEditingEnabled(enabled);
     }
 
     private void CommitInputEventEditing(bool refreshNodes = true)
@@ -1833,6 +1925,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshInputTimelineTicks();
         OnPropertyChanged(nameof(InputTimelineWidth));
         OnPropertyChanged(nameof(InputTimelineHeight));
+        OnPropertyChanged(nameof(InputEventSummaryText));
     }
 
     private void RefreshInputTimelineTicks()
@@ -1858,7 +1951,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             .Select(item =>
                 $"{item.DisplayFrame}F display / {item.Frame}F internal: "
                 + InputNodeEditorLogic.FormatNode(item)
-                + $" / hold={item.DurationFrames?.ToString(CultureInfo.InvariantCulture) ?? "global"}F")
+                + $" / hold={(item.DurationFrames ?? 1).ToString(CultureInfo.InvariantCulture)}F")
             .ToArray();
 
     private void RefreshKeyMapRows()
@@ -2429,6 +2522,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     protected override void OnClosed(EventArgs e)
     {
         _testPlaybackCancellation?.Cancel();
+        CloseInputNodeEditorWindow();
         try
         {
             _testPlaybackService.ReleaseAllKeys();

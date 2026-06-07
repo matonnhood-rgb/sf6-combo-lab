@@ -27,9 +27,7 @@ public sealed class InputStatePlanner
         {
             var keys = ParseKeys(inputEvent);
             var releaseFrame = inputEvent.Frame
-                + (inputEvent.DurationFrames
-                    ?? holdDuration.Value.TotalSeconds
-                    * ActionTestPlaybackService.FramesPerSecond);
+                + (inputEvent.DurationFrames ?? 1);
             foreach (var key in keys)
             {
                 operations.Add(new StateOperation(inputEvent.Frame, key, true));

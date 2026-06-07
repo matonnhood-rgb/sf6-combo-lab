@@ -13,7 +13,8 @@ public static class InputNodeEditorLogic
     public static InputEvent CreateNode(int internalFrame) =>
         new()
         {
-            Frame = Math.Max(0, internalFrame)
+            Frame = Math.Max(0, internalFrame),
+            DurationFrames = 1
         };
 
     public static InputEvent CreateNodeAfter(
@@ -44,6 +45,7 @@ public static class InputNodeEditorLogic
         return new InputEvent
         {
             Frame = frame,
+            DurationFrames = source.DurationFrames ?? 1,
             LogicalInputs = new ObservableCollection<string>(
                 source.LogicalInputs)
         };
